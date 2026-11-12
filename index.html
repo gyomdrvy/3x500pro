@@ -91,7 +91,7 @@ th{background:#dcecff;color:#10385f;font-weight:800}td,th{padding:12px}tr:nth-ch
 @media(max-width:700px){.student-name-input{width:270px!important;min-width:230px;}}
 </style></head><body><div class="app-shell"><aside class="sidebar"><div class="brand"><img src="icon-180.png" alt="Logo EPS"><div><strong>EPS</strong><strong>Demi-fond</strong></div></div><nav id="nav" aria-label="Navigation principale"></nav><div class="sidebar-bottom"><span class="save-dot"></span><span id="saveState" class="small">Sauvegarde locale</span><button onclick="download('sauvegarde_toutes_classes.json',JSON.stringify({...data,version:'terminale-pro-1'},null,2),'application/json')">☁ Sauvegarder</button></div></aside><div class="workspace"><header class="hero"><div class="hero-text"><span class="hero-eyebrow">EPS · PERFORMANCE & PROGRESSION</span><h1>Demi-fond Terminale Pro</h1><p>3 × 500 m · Lycée du Bon Sauveur</p></div><img src="track-banner.png" alt="Illustration de piste d’athlétisme" /></header><div class="mobile-nav-label">Navigation <button onclick="document.body.classList.toggle('nav-open')" aria-label="Afficher ou masquer le menu">☰ Menu</button></div><main id="app"></main><footer>Les données sont enregistrées dans ce navigateur. Pense à exporter une sauvegarde JSON régulièrement.</footer></div></div><script>
 'use strict';
-const KEY='eps_demi_fond_terminale_pro_v1';const tabs=['Classes','Course 1','Repères','Course 2','Course 3','AFLP','Progression','Bilan'];let tab=0;
+const KEY='eps_demi_fond_terminale_pro_v1';const tabs=['Classes & évaluations','Pelotons','Course 1','Course 2','Course 3','Repères','Barème & points','Suivi & progression','Bilan & exports'];let tab=0;
 const perfPoints=[3,2.5,2,1.5,1,.5,.25];
 const perfLimits={F:[344,374,404,449,494,539,600],G:[269,299,329,374,419,464,525]};
 const ranges={
@@ -158,6 +158,7 @@ function aflpDegree(delta, walk){
  if(delta==null)return null;
  return delta<5?3:delta<15?2:1;
 }
+function walked(s,course){return s.walks?.[course]??s.walk===String(course)}
 function calculate(s){
  const runs=[1,2,3].map(i=>{
    const time=sec(s['c'+i]),split=sec(s['split'+i]),project=sec(s['project'+i]);
@@ -170,14 +171,14 @@ function calculate(s){
  const degree=gap==null?null:gap<5?3:gap<10?2:gap<=15?1:0;
  const performance=total==null?null:perfPoints[perfLimits[s.sex==='F'?'F':'G'].findIndex(limit=>total<=limit)]??0;
  const regularity=points(s.regularity,ranges.regularity[degree]);
- const observation=Number(s.observation||1);
- const degree2=aflpDegree(runs[observation-1]?.delta,s.walk===String(observation));
+ const meanDelta=runs.every(run=>run.delta!=null)?runs.reduce((sum,run)=>sum+run.delta,0)/3:null;
+ const degree2=aflpDegree(meanDelta,[1,2,3].some(i=>walked(s,i)));
  const aflp2=points(s.aflp2,ranges.aflp2[degree2]);
  const weight=Number(s.weight||4);
  const aflp3=points(s.aflp3,[0,weight]);
  const aflp5=points(s.aflp5,[0,8-weight]);
  const components=[performance,regularity,aflp2,aflp3,aflp5];
- return {runs,total,gap,degree,degree2,performance,regularity,aflp2,aflp3,aflp5,weight,
+ return {runs,total,gap,degree,degree2,meanDelta,performance,regularity,aflp2,aflp3,aflp5,weight,
   speed1:runs[0].speed,speed2:runs[1].speed,speed3:runs[2].speed,
   aflp1:performance==null||regularity==null?null:performance+regularity,
   final:components.every(n=>n!=null)?components.reduce((a,b)=>a+b,0):null};
@@ -188,7 +189,6 @@ function setStudent(id,field,value,refresh=true){
  if(!s)return;
  s[field]=value;
  if(field==='weight'){s.aflp3='';s.aflp5=''}
- if(field==='observation'||field==='walk')s.aflp2='';
  save();
  if(refresh)render();
 }
@@ -226,21 +226,44 @@ function parseCSV(text){
 }
 async function importFile(file){if(!file)return;try{if(/\.xlsx?$/i.test(file.name)){if(typeof XLSX==='undefined')throw Error('Le module Excel n’est pas chargé. Connectez-vous à Internet pour le premier import, ou exportez le fichier en CSV.');let bytes=await file.arrayBuffer();let workbook=XLSX.read(bytes,{type:'array',cellDates:false});let sheet=workbook.Sheets[workbook.SheetNames[0]];let rows=XLSX.utils.sheet_to_json(sheet,{header:1,defval:'',raw:false});importRows(rows)}else parseCSV(await file.text())}catch(e){alert('Import impossible : '+e.message)}}
 function importRows(rows){rows=rows.filter(row=>row.some(v=>String(v??'').trim()));if(!rows.length)throw Error('Fichier vide');let normalize=v=>String(v??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();let head=rows[0].map(normalize);let hasHeader=head.some(x=>/nom|prenom|sexe|genre|eleve/.test(x));let nameCol=head.findIndex(x=>/^(nom complet|nom et prenom|eleve|eleves|nom prenom)$/.test(x));let lastCol=head.findIndex(x=>x==='nom'||x==='lastname');let firstCol=head.findIndex(x=>x==='prenom'||x==='firstname');let sexCol=head.findIndex(x=>/sexe|genre/.test(x));let added=0;for(const fields of rows.slice(hasHeader?1:0)){let name=nameCol>=0?String(fields[nameCol]??'').trim():lastCol>=0?([fields[lastCol],firstCol>=0?fields[firstCol]:''].map(v=>String(v??'').trim()).filter(Boolean).join(' ')):String(fields[0]??'').trim();if(!name)continue;let rawSex=sexCol>=0?fields[sexCol]:(hasHeader?'':fields[1]);let sex=/^(f|fille|feminin|female)/i.test(normalize(rawSex))?'F':'G';addRosterStudent(name,sex);const roster=activeClass().students.at(-1);if(lastCol>=0&&firstCol>=0){roster.last=String(fields[lastCol]??'').trim();roster.first=String(fields[firstCol]??'').trim();for(const e of activeClass().evaluations){const student=e.students.find(x=>x.id===roster.id);student.last=roster.last;student.first=roster.first}}added++}save();alert(added+' élèves importés');render()}
-function timer(course){return data.timers[course]??{elapsed:0}}
-function elapsed(t){return t.elapsed+(t.started==null?0:Math.max(0,Date.now()-t.started))}
-function startTimer(course){
- const t=timer(course);
- if(t.started!=null)return;
- data.timers[course]={...t,started:Date.now()};
+function groups(){return activeEval().groups??[]}
+function createGroup(){
+ const evaluation=activeEval();
+ const name=prompt('Nom du peloton','Peloton '+(groups().length+1));
+ if(!name?.trim())return;
+ (evaluation.groups??=[]).push({id:uid(),name:name.trim()});
  save();render();
 }
-function stopTimer(course){data.timers[course]={elapsed:elapsed(timer(course))};save();render()}
-function resetTimer(course){
- if(!confirm('Remettre le chronomètre à zéro ? Les temps des élèves restent enregistrés.'))return;
- data.timers[course]={elapsed:0};save();render();
+function deleteGroup(id){
+ if(!confirm('Supprimer ce peloton ? Ses élèves seront désaffectés et garderont leurs temps.'))return;
+ const evaluation=activeEval();
+ evaluation.groups=groups().filter(group=>group.id!==id);
+ for(const s of data.students)if(s.group===id)delete s.group;
+ for(const course of [1,2,3])delete data.timers[clockKey(course,id)];
+ save();render();
 }
-function capture(course,id,field){
- const t=timer(course);
+function groupView(){
+ const options=s=>groups().map(g=>`<option value="${g.id}" ${s.group===g.id?'selected':''}>${esc(g.name)}</option>`).join('');
+ return `<section class="panel"><h2>Pelotons</h2><p>Créez les pelotons et affectez les élèves avant C1. Chaque peloton a son propre chronomètre pour chacune des trois courses.</p><button class="primary" onclick="createGroup()">+ Peloton</button>
+ ${groups().map(g=>`<div class="row"><strong>${esc(g.name)}</strong><span>${data.students.filter(s=>s.group===g.id).length} élèves</span><button class="danger" onclick="deleteGroup('${g.id}')">Supprimer</button></div>`).join('')}</section>
+ <section class="panel scroll"><table><thead><tr><th>Élève</th><th>Peloton</th></tr></thead><tbody>${data.students.map(s=>`<tr><th scope="row">${esc(s.name)}</th><td><select aria-label="Peloton de ${esc(s.name)}" onchange="setStudent('${s.id}','group',this.value)"><option value="">Sans peloton</option>${options(s)}</select></td></tr>`).join('')}</tbody></table></section>`;
+}
+function clockKey(course,group){return group?course+'-'+group:String(course)}
+function timer(course,group){return data.timers[clockKey(course,group)]??{elapsed:0}}
+function elapsed(t){return t.elapsed+(t.started==null?0:Math.max(0,Date.now()-t.started))}
+function startTimer(course,group){
+ const t=timer(course,group);
+ if(t.started!=null)return;
+ data.timers[clockKey(course,group)]={...t,started:Date.now()};
+ save();render();
+}
+function stopTimer(course,group){data.timers[clockKey(course,group)]={elapsed:elapsed(timer(course,group))};save();render()}
+function resetTimer(course,group){
+ if(!confirm('Remettre le chronomètre à zéro ? Les temps des élèves restent enregistrés.'))return;
+ data.timers[clockKey(course,group)]={elapsed:0};save();render();
+}
+function capture(course,group,id,field){
+ const t=timer(course,group);
  if(t.started==null)return;
  const seconds=Math.round(elapsed(t)/1000);
  if(seconds<1)return;
@@ -250,13 +273,19 @@ function capture(course,id,field){
 }
 function clocks(){
  document.querySelectorAll('[data-clock]').forEach(el=>{
-   el.textContent=fmt(Math.floor(elapsed(timer(el.dataset.clock))/1000));
+   el.textContent=fmt(Math.floor(elapsed(data.timers[el.dataset.clock]??{elapsed:0})/1000));
  });
 }
 setInterval(clocks,200);
-function timerUI(course){
- const running=timer(course).started!=null;
- return `<div class="row"><div class="clock" data-clock="${course}"></div><button class="primary" ${running?'disabled':''} onclick="startTimer(${course})">▶ Départ</button><button ${running?'':'disabled'} onclick="stopTimer(${course})">⏸ Pause</button><button onclick="resetTimer(${course})">↺ Réinitialiser</button></div>`;
+function timerUI(course,group){
+ const running=timer(course,group).started!=null;
+ const args=`${course},'${group}'`;
+ return `<div class="row"><div class="clock" data-clock="${clockKey(course,group)}"></div><button class="primary" ${running?'disabled':''} onclick="startTimer(${args})">▶ Départ</button><button ${running?'':'disabled'} onclick="stopTimer(${args})">⏸ Pause</button><button onclick="resetTimer(${args})">↺ Réinitialiser</button></div>`;
+}
+function setWalk(id,course,value){
+ const s=data.students.find(x=>x.id===id);
+ s.walks={...s.walks,[course]:value};
+ save();
 }
 let progressMetric='final',progressStudent='all';
 function evaluationRows(e){let oldStudents=data.students;try{data.students=e.students;return computed().rows}finally{data.students=oldStudents}}
@@ -297,12 +326,19 @@ function updateCourseStats(course,id){
  if(element)element.textContent=courseStats(data.students.find(s=>s.id===id),course);
 }
 function courseView(course){
- const running=timer(course).started!=null;
- return `<section class="panel"><h2>Course ${course} · 500 m</h2>${timerUI(course)}<p class="muted">Touchez « 250 m » au passage de l’élève et communiquez-lui son temps. Touchez « Arrivée » à la fin des 500 m. Les temps se corrigent au format 1:48 ou en secondes. Récupération maximale entre deux courses : 10 min.</p></section>
- <div class="grid">${data.students.map(s=>`<article class="runner ${sec(s['c'+course])!=null?'done':''}"><strong>${esc(s.name)}</strong>
- <div class="row">${course<=2?timeField(s,'project'+course,'Temps annoncé avant le départ'):''}${timeField(s,'split'+course,'Passage aux 250 m')}${timeField(s,'c'+course,'Temps aux 500 m')}</div>
- <div class="row"><button ${running?'':'disabled'} onclick="capture(${course},'${s.id}','split${course}')">250 m</button><button class="primary" ${running?'':'disabled'} onclick="capture(${course},'${s.id}','c${course}')">Arrivée</button></div>
- <span class="muted" id="stats-${s.id}">${courseStats(s,course)}</span></article>`).join('')}</div>`;
+ const unassigned=data.students.filter(s=>!groups().some(g=>g.id===s.group));
+ const sections=groups().map(g=>({...g,students:data.students.filter(s=>s.group===g.id)}));
+ if(unassigned.length||!sections.length)sections.push({id:'',name:groups().length?'Sans peloton':'Départ collectif',students:unassigned});
+ return `<section class="panel"><h2>Course ${course} · 500 m</h2><p class="muted">Touchez « 250 m » au passage de l’élève et communiquez-lui son temps. Touchez « Arrivée » à la fin des 500 m. Les temps se corrigent au format 1:48 ou en secondes. Récupération maximale entre deux courses : 10 min.</p></section>
+ ${sections.map(({id,name,students})=>{
+   const running=timer(course,id).started!=null;
+   return `<section class="panel"><h3>${esc(name)} · ${students.length} élèves</h3>${timerUI(course,id)}
+   <div class="grid">${students.map(s=>`<article class="runner ${sec(s['c'+course])!=null?'done':''}"><strong>${esc(s.name)}</strong>
+   <div class="row">${course<=2?timeField(s,'project'+course,'Temps annoncé avant le départ'):''}${timeField(s,'split'+course,'Passage aux 250 m')}${timeField(s,'c'+course,'Temps aux 500 m')}</div>
+   <div class="row"><button ${running?'':'disabled'} onclick="capture(${course},'${id}','${s.id}','split${course}')">250 m</button><button class="primary" ${running?'':'disabled'} onclick="capture(${course},'${id}','${s.id}','c${course}')">Arrivée</button>
+   <label><input type="checkbox" ${walked(s,course)?'checked':''} onchange="setWalk('${s.id}',${course},this.checked)"> Marche en deuxième moitié</label></div>
+   <span class="muted" id="stats-${s.id}">${courseStats(s,course)}</span></article>`).join('')}</div></section>`;
+ }).join('')}`;
 }
 function degreeButtons(s,field,grid,degree){
  return `<div class="grade-choice">${grid.flatMap(([min,max],i)=>{
@@ -313,23 +349,37 @@ function degreeButtons(s,field,grid,degree){
    });
  }).join('')}${s[field]!==''&&s[field]!=null?`<button title="Effacer la note" onclick="setStudent('${s.id}','${field}','')">✕</button>`:''}</div>`;
 }
+function levelReminder(){
+ const analysis=[
+  'Entraînement inadapté. Écart au projet supérieur à 6 s. Choix, analyses et régulations inexistants.',
+  'Entraînement partiellement adapté. Écart de 5 à 6 s. Choix et régulations à l’aide de repères externes simples.',
+  'Entraînement adapté. Écart de 3 à 4 s. Choix, analyses et régulations en adéquation avec ses ressources.',
+  'Entraînement optimisé. Écart inférieur à 3 s. Choix, analyses et régulations ciblés pour soi et pour les autres.'
+ ];
+ const preparation=[
+  'Échauffement inadapté, aucune récupération. Reste centré sur soi.',
+  'Échauffement irrégulier et peu adapté. Peu de moyens pour récupérer. Travaille avec son partenaire sans réellement l’aider.',
+  'Échauffement progressif et adapté. Récupération au moins en marche active. Guide son partenaire.',
+  'Échauffement progressif avec repérage d’allures. Récupération active immédiate. Motive et corrige son partenaire et un petit groupe.'
+ ];
+ return `<section class="panel scroll"><h3>Les quatre degrés des AFLP 3 et 5</h3><table><thead><tr><th>Degré</th><th>AFLP 3 · Analyse et projet</th><th>AFLP 5 · Préparation et coaching</th></tr></thead><tbody>${analysis.map((description,i)=>`<tr><th class="${degreeColors[i]}" scope="row">Degré ${i+1}</th><td>${description}</td><td>${preparation[i]}</td></tr>`).join('')}</tbody></table></section>`;
+}
 function gradingView(rows){
  return `<section class="panel"><h2>Barème & points</h2>
  <p>AFLP 1 /7 = performance /3 + régularité /4. La performance est calculée sur le cumul des trois 500 m avec le barème filles ou garçons.</p>
- <p class="muted">Pour l’AFLP 2, sélectionnez la course observée. La marche en deuxième moitié prime sur l’écart chronométré. Une perte de 15 s est rattachée au degré 2. Les projets de C1 et C2 éclairent l’AFLP 3 avec les observations de l’entraînement.</p>
+ <p class="muted">Pour l’AFLP 2, le degré est calculé sur la moyenne des écarts entre les deux 250 m des trois courses. La marche en deuxième moitié sur une seule course suffit pour appliquer le degré 1. Une perte moyenne de 15 s relève du degré 2. Les projets de C1 et C2 éclairent l’AFLP 3 avec les observations de l’entraînement.</p>
  <details><summary>Descripteurs des quatre degrés</summary>
  <p><b>AFLP 1 · Régularité</b> — Écart entre les deux courses extrêmes : plus de 15 s, 10 à 15 s, 5 à 9 s, moins de 5 s.</p>
  <p><b>AFLP 2 · Allure</b> — Marche en deuxième moitié, perte d’au moins 15 s, perte de 5 à 14 s, perte de moins de 5 s.</p>
- <p><b>AFLP 3 · Analyse et projet</b> — Entraînement inadapté et écart supérieur à 6 s, adaptation partielle et écart de 5 à 6 s, entraînement adapté et écart de 3 à 4 s, entraînement optimisé et écart inférieur à 3 s. Observer aussi les choix et les régulations.</p>
- <p><b>AFLP 5 · Préparation et coaching</b> — Échauffement inadapté sans récupération, préparation irrégulière avec peu d’aide au partenaire, préparation adaptée avec récupération et guidage, repérage d’allures avec récupération active et coaching du groupe.</p></details></section>
+ </details></section>
+ ${levelReminder()}
  <div class="grid">${data.students.map(s=>{
-   const r=rows[s.id],observation=Number(s.observation||1);
+   const r=rows[s.id];
    return `<article class="runner"><h3>${esc(s.name)}</h3>
    <p><b>Performance /3</b> · ${displayNumber(r.performance)} · Cumul ${fmt(r.total)}</p>
    <div><b>Régularité /4</b> · ${r.degree==null?'Trois temps requis':'Degré '+(r.degree+1)+' · Écart '+r.gap+' s'}${degreeButtons(s,'regularity',ranges.regularity,r.degree)}</div>
-   <div><b>AFLP 2 /5</b> · ${r.degree2==null?'Passage et arrivée requis':'Degré '+(r.degree2+1)}
-   <div class="row"><label>Course observée<select onchange="setStudent('${s.id}','observation',this.value)">${[1,2,3].map(i=>`<option value="${i}" ${observation===i?'selected':''}>C${i}</option>`).join('')}</select></label>
-   <label><input type="checkbox" ${s.walk===String(observation)?'checked':''} onchange="setStudent('${s.id}','walk',this.checked?'${observation}':'')"> Marche en deuxième moitié</label></div>
+   <div><b>AFLP 2 /5</b> · ${r.degree2==null?'Trois passages et trois arrivées requis':'Degré '+(r.degree2+1)} · Moyenne : ${displayNumber(r.meanDelta)} s
+   <div class="row">${[1,2,3].map(course=>`<label><input type="checkbox" ${walked(s,course)?'checked':''} onchange="setWalk('${s.id}',${course},this.checked);render()"> Marche C${course}</label>`).join('')}</div>
    ${degreeButtons(s,'aflp2',ranges.aflp2,r.degree2)}</div>
    <label>Choix de l’élève (leçon 3)<select onchange="setStudent('${s.id}','weight',this.value)">${[6,4,2].map((n,i)=>`<option value="${n}" ${r.weight===n?'selected':''}>Choix ${i+1} · AFLP 3 /${n} et AFLP 5 /${8-n}</option>`).join('')}</select></label>
    <div><b>AFLP 3 /${r.weight}</b> · Écarts au projet C1 / C2 : ${r.runs.slice(0,2).map(run=>run.error==null?'—':run.error+' s').join(' / ')}${degreeButtons(s,'aflp3',ranges[r.weight])}</div>
@@ -350,14 +400,15 @@ function summaryView(rows,full){
  <section class="panel scroll"><table><thead><tr>${labels.map(label=>`<th scope="col">${label}</th>`).join('')}</tr></thead><tbody>${table}</tbody></table></section>`;
 }
 
-function render(){let c=computed();$('nav').innerHTML=tabs.map((x,i)=>`<button class="${i===tab?'active':''}" onclick="tab=${i};document.body.classList.remove('nav-open');render()"><span class="nav-ico">${['▦','◷','♧','⚑','⚑','☑','▥','▤'][i]}</span><span>${['Classes & évaluations','Course 1','Repères','Course 2','Course 3','Barème & points','Suivi & progression','Bilan & exports'][i]}</span></button>`).join('');let html='';
+function render(){let c=computed();$('nav').innerHTML=tabs.map((x,i)=>`<button class="${i===tab?'active':''}" onclick="tab=${i};document.body.classList.remove('nav-open');render()"><span class="nav-ico">${['▦','♧','⚑','⚑','⚑','◷','☑','▥','▤'][i]}</span><span>${x}</span></button>`).join('');let html='';
 if(tab===0){let cl=activeClass();html=`<section class="panel"><h2>Mes classes</h2><p class="muted">Chaque classe conserve sa liste d'élèves et toutes ses évaluations.</p><div class="row"><label>Classe <select onchange="switchClass(this.value)">${data.classes.map(x=>`<option value="${esc(x.id)}" ${x.id===data.activeClassId?'selected':''}>${esc(x.name)} (${x.students.length} élèves)</option>`).join('')}</select></label><button class="primary" onclick="createClass()">+ Classe</button><button onclick="renameClass()">Renommer</button><button class="danger" onclick="deleteClass()">Supprimer classe</button></div></section><section class="panel"><h2>Évaluations — ${esc(cl.name)}</h2><p class="muted">Crée autant d'évaluations que nécessaire. Les résultats, chronos et notes sont indépendants pour chaque évaluation.</p><div class="row"><label>Évaluation <select onchange="switchEvaluation(this.value)">${cl.evaluations.map(e=>`<option value="${esc(e.id)}" ${e.id===cl.activeEvaluationId?'selected':''}>${esc(e.name)}</option>`).join('')}</select></label><button class="primary" onclick="createEvaluation()">+ Nouvelle évaluation</button><button onclick="duplicateEvaluation()">Dupliquer</button><button onclick="renameEvaluation()">Renommer</button><button class="danger" onclick="deleteEvaluation()">Supprimer évaluation</button></div></section><section class="panel"><h2>Élèves — ${esc(cl.name)}</h2><p class="muted">Import Excel (.xlsx, .xls) ou CSV. Les élèves ajoutés sont disponibles dans toutes les évaluations de la classe.</p><div class="row"><input type="file" id="csv" accept=".xlsx,.xls,.csv,.txt,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"><button onclick="let n=prompt('Nom et prénom de l’élève');if(n){addRosterStudent(n);save();render()}">+ Élève</button><button onclick="download('sauvegarde_toutes_classes.json',JSON.stringify({...data,version:'terminale-pro-1'},null,2),'application/json')">⬇ Sauvegarder toutes les classes</button><label class="btn">Restaurer JSON <input style="width:160px" type="file" id="restore" accept=".json"></label></div></section><section class="panel scroll"><table><thead><tr><th>Élève</th><th>Sexe</th><th>Action</th></tr></thead><tbody>${cl.students.map(s=>`<tr><td><input class="student-name-input" type="text" value="${esc(s.name)}" onchange="updateRosterStudent('${s.id}','name',this.value)"></td><td><select onchange="updateRosterStudent('${s.id}','sex',this.value)"><option ${s.sex==='G'?'selected':''}>G</option><option ${s.sex==='F'?'selected':''}>F</option></select></td><td><button class="danger" onclick="deleteRosterStudent('${s.id}')">Supprimer</button></td></tr>`).join('')}</tbody></table></section>`}
 
-if([1,3,4].includes(tab))html=courseView(tab===1?1:tab-1);
-if(tab===2)html=summaryView(c.rows,false);
-if(tab===5)html=gradingView(c.rows);
-if(tab===6)html=progressionView();
-if(tab===7)html=summaryView(c.rows,true);
+if(tab===1)html=groupView();
+if(tab>=2&&tab<=4)html=courseView(tab-1);
+if(tab===5)html=summaryView(c.rows,false);
+if(tab===6)html=gradingView(c.rows);
+if(tab===7)html=progressionView();
+if(tab===8)html=summaryView(c.rows,true);
 if(tab!==0)html=`<section class="panel row"><strong>${esc(activeClass().name)}</strong><label>Évaluation <select onchange="switchEvaluation(this.value)">${activeClass().evaluations.map(e=>`<option value="${esc(e.id)}" ${e.id===activeClass().activeEvaluationId?'selected':''}>${esc(e.name)}</option>`).join('')}</select></label><button onclick="tab=0;render()">Gérer les évaluations</button></section>`+html;$('app').innerHTML=html;let csv=$('csv');if(csv)csv.onchange=async e=>{let f=e.target.files[0];if(f)await importFile(f)};let restore=$('restore');if(restore)restore.onchange=async e=>{let f=e.target.files[0];if(!f)return;try{let x=JSON.parse(await f.text());if(!Array.isArray(x.classes)||x.version!=='terminale-pro-1')throw Error();if(confirm('Remplacer toutes les classes actuelles par cette sauvegarde ?')){if(!Array.isArray(x.classes)){x.classes=[{id:'legacy',name:'Classe restaurée',students:x.students,timers:{}}];x.activeClassId='legacy'}if(!x.classes.length)throw Error();data=x;for(const cl of data.classes)ensureClass(cl);if(!data.classes.some(cl=>cl.id===data.activeClassId))data.activeClassId=data.classes[0].id;for(const cl of data.classes)for(const e of cl.evaluations)e.timers={};loadActive();save();render()}}catch{alert('Choisissez une sauvegarde JSON de l’application Terminale Pro.')}};clocks()}
 
 render();if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});
